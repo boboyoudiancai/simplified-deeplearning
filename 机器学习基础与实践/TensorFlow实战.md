@@ -27,7 +27,7 @@ print(x_constant)
 ## out: Tensor("x_constant:0", shape=(2, 3, 4), dtype=int64)
 
 # 声明一个使用shape=(3,4,5,6)，并使用高斯分布随机生成的张量
-x_normal = tf.random_normal(shape=(3,4,5,6),mean=1,stddev=2,name="x_normal")
+x_normal = tf.random.normal(shape=(3,4,5,6),mean=1,stddev=2,name="x_normal")
 print(x_normal)
 ## out: Tensor("x_normal:0", shape=(3, 4, 5, 6), dtype=float32)
 ```
@@ -37,8 +37,8 @@ print(x_normal)
 &emsp;&emsp;在有了tensor之后，就可以根据定义一些tensor之间的运算操作形成计算图。一个TensorFlow程序中可以有多个的计算图，TensorFlow自身会维护一个默认的计算图，因此在大部分只需要一个计算图的情况下可以不显示的对计算图进行指定，下面是一个构建简单计算图的示例：
 
 ```python
-x_1 = tf.random_normal((2,3,4), name = "x_1")
-x_2 = tf.random_normal((2,3,4), name = "x_2")
+x_1 = tf.random.normal((2,3,4), name = "x_1")
+x_2 = tf.random.normal((2,3,4), name = "x_2")
 y_1 = x_1 + x_2
 y_2 = x_1 * x_2
 ```
@@ -62,9 +62,9 @@ y_2 = x_1 * x_2
 &emsp;&emsp;上面所示的例子中我们已经定义了一个计算图，但是并没有真正的去执行和计算。计算图的执行需要定义TensorFlow中的一个Session，Session管理着计算所需的各种资源，通过调用Session的run方法，我们可以运行一个计算图中的操作，示例如下。
 
 ```python
-sess = tf.Session()
+tf.compat.v1.disable_eager_execution()  # 关闭即时执行模式
+sess = tf.compat.v1.Session()
 y_1_value, y_2_value = sess.run([y_1,y_2])
-print(y_1_value, y_2_value)
 
 ## 输出结果
 # [[[ 0.99805093 -1.44938612 -0.02456892  2.45622158]
@@ -97,7 +97,7 @@ print(y_1_value, y_2_value)
 &emsp;&emsp;机器学习算法通常需要持续的迭代更新参数变量，这些参数变量都使用TensorFlow中的`Variable`来进行保存和管理，示例如下：
 
 ```python
-w_t = tf.random_normal((2,3,4),name="weight_tensor")
+w_t = tf.random.normal((2,3,4),name="weight_tensor")
 w = tf.Variable(w_t,name="weight")
 print(w)print(w)
 ## out: <tf.Variable 'weight_1:0' shape=(2, 3, 4) dtype=float32_ref>
@@ -127,56 +127,69 @@ Variable实际上是一种特殊的运算，它接受张量的输入，同是输
 >这些代码可以在我们提供的jupyter notebook示例[tensorflow example](src/linear_model.ipynb)中直接运行查看。
 
 ```python
+import tensorflow as tf
 import time
 
-import tensorflow as tf
-from tensorflow.examples.tutorials.mnist import input_data
+(x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
 
-mnist = input_data.read_data_sets("../data/MNIST_data/", one_hot=True)
+# 预处理
+train_images = x_train.reshape(-1, 28*28).astype('float32') / 255.0
+test_images = x_test.reshape(-1, 28*28).astype('float32') / 255.0
+train_labels = tf.one_hot(y_train, 10).numpy()  # 转换为one-hot编码
+test_labels = tf.one_hot(y_test, 10).numpy()
 
 # 参量设置
-batch_size = 128 
-image_size = 28*28
-label_num = 10
+batch_size = 128
+max_steps = 10000
 step_size = 0.001
-max_steps= 10000
-
-# 每个样本特征和标签的占位表示
-x = tf.placeholder(tf.float32, [None, image_size])
-y_real = tf.placeholder(tf.float32, [None, label_num])
 
 # 构建模型
-w = tf.Variable(tf.truncated_normal(shape=(image_size, label_num), stddev=0.1), name="weight")
-b = tf.Variable(tf.zeros(shape=label_num), name="bias")
-p = tf.nn.softmax(tf.matmul(x, w) + b, dim=1)
+model = tf.keras.Sequential([
+    tf.keras.layers.Dense(10, 
+                         activation='softmax',
+                         kernel_initializer=tf.keras.initializers.TruncatedNormal(stddev=0.1),
+                         bias_initializer='zeros')
+])
 
-# softmax损失
-loss = tf.reduce_sum(-y_real*tf.log(p))/batch_size
+# 定义损失函数和优化器
+loss_fn = tf.keras.losses.CategoricalCrossentropy()
+optimizer = tf.keras.optimizers.SGD(learning_rate=step_size)
 
-# 准确度
-correct_prediction = tf.equal(tf.argmax(p, 1), tf.argmax(y_real, 1))
-accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+# 创建数据集
+train_dataset = tf.data.Dataset.from_tensor_slices(
+    (train_images, train_labels)).shuffle(60000).batch(batch_size)
+train_dataset = tf.data.Dataset.from_tensor_slices(
+    (train_images, train_labels)).shuffle(60000).batch(batch_size).repeat()
+# 测试数据预处理
+test_data = (test_images, test_labels)
 
-# 使用梯度下降更新
-update = tf.train.GradientDescentOptimizer(step_size).minimize(loss)
+# 训练循环
+start_time = time.time()
 
-# 初始化操作
-init_op = tf.global_variables_initializer()
+for step, (x_batch, y_batch) in enumerate(train_dataset.take(max_steps)):
+    with tf.GradientTape() as tape:
+        predictions = model(x_batch, training=True)
+        loss_value = loss_fn(y_batch, predictions)
+    
+    gradients = tape.gradient(loss_value, model.trainable_variables)
+    optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+    
+    if step % 50 == 0:
+        test_pred = model.predict(test_images, batch_size=batch_size, verbose=0)
+        correct_prediction = tf.equal(tf.argmax(test_pred, 1), tf.argmax(test_labels, 1))
+        accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+        
+        time_cost = (time.time() - start_time) * 1000 / 50
+        start_time = time.time()
+        
+        print(f"Step: {step:5d}, Test accuracy: {accuracy:.3f}, timeCos: {time_cost:.1f}ms")
 
-# 迭代更新
-with tf.Session() as sess:
-    sess.run(init_op)
-    start = time.time()
-    for i in range(max_steps+1):
-        xs, ys = mnist.train.next_batch(batch_size)
-        if i % 50 == 0:
-            timeCos = time.time() - start
-            start = time.time()
-            print("Step: {:d}, Test accuracy: {:.3f}, timeCos: {:.1f}".
-                  format(i, sess.run(accuracy,feed_dict={x: mnist.test.images,
-                                                         y_real: mnist.test.labels}),
-                         timeCos* 1000 / 50))
-        sess.run(update, feed_dict={x: xs, y_real: ys})
+# 最终评估
+final_pred = model.predict(test_images, verbose=0)
+final_accuracy = tf.reduce_mean(tf.cast(
+    tf.equal(tf.argmax(final_pred, 1), tf.argmax(test_labels, 1)), 
+    tf.float32))
+print(f"\nFinal test accuracy: {final_accuracy:.3f}")
 ```
 
 运行10000次后，模型在测试集上的分类正确率达到了0.85。
